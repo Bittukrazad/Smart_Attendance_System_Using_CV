@@ -1,0 +1,8 @@
+encodings.pickle
+*.csv
+*.dat
+__pycache__/
+*.pyc
+venv/
+.env/
+
