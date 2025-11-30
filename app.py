@@ -10,6 +10,8 @@ from scipy.spatial import distance as dist
 import os
 from PIL import Image
 import time
+import plotly.express as px
+import plotly.graph_objects as go
 
 # Page configuration
 st.set_page_config(
@@ -28,6 +30,12 @@ st.markdown("""
         color: #1f77b4;
         text-align: center;
         margin-bottom: 2rem;
+    }
+    .role-header {
+        font-size: 1.8rem;
+        font-weight: bold;
+        color: #2c3e50;
+        margin-bottom: 1rem;
     }
     .stButton>button {
         width: 100%;
@@ -57,13 +65,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Helper Functions
-def eye_aspect_ratio(eye):
-    A = dist.euclidean(eye[1], eye[5])
-    B = dist.euclidean(eye[2], eye[4])
-    C = dist.euclidean(eye[0], eye[3])
-    ear = (A + B) / (2.0 * C)
-    return ear
-
 def load_encodings():
     try:
         with open("encodings.pickle", "rb") as f:
@@ -92,13 +93,47 @@ def load_attendance_data():
     except FileNotFoundError:
         return pd.DataFrame(columns=['Name', 'Timestamp'])
 
+def get_all_attendance_files():
+    """Get all attendance CSV files"""
+    return [f for f in os.listdir('.') if f.startswith('Attendance_') and f.endswith('.csv')]
+
+def calculate_student_statistics(student_name):
+    """Calculate attendance statistics for a student"""
+    attendance_files = get_all_attendance_files()
+    
+    total_days = len(attendance_files)
+    present_days = 0
+    attendance_dates = []
+    
+    for file in attendance_files:
+        df = pd.read_csv(file)
+        if student_name in df['Name'].values:
+            present_days += 1
+            date = file.replace('Attendance_', '').replace('.csv', '')
+            attendance_dates.append(date)
+    
+    percentage = (present_days / total_days * 100) if total_days > 0 else 0
+    
+    return {
+        'total_days': total_days,
+        'present_days': present_days,
+        'absent_days': total_days - present_days,
+        'percentage': percentage,
+        'attendance_dates': attendance_dates
+    }
+
+def get_all_students():
+    """Get list of all students from encodings"""
+    encodings = load_encodings()
+    if encodings:
+        return list(set(encodings['names']))
+    return []
+
 # Initialize session state
 if 'running' not in st.session_state:
     st.session_state.running = False
 if 'marked_today' not in st.session_state:
     st.session_state.marked_today = []
-if 'liveness_info' not in st.session_state:
-    st.session_state.liveness_info = {}
 if 'camera' not in st.session_state:
     st.session_state.camera = None
 
@@ -106,13 +141,37 @@ if 'camera' not in st.session_state:
 def main():
     st.markdown('<h1 class="main-header">👤 Smart Attendance System</h1>', unsafe_allow_html=True)
     
-    # Sidebar
+    # Sidebar - Role Selection
     with st.sidebar:
-        st.header("📋 Menu")
-        menu_option = st.radio(
-            "Select Option",
-            ["Live Attendance", "Encode Faces", "View Attendance", "About"]
+        st.header("🔐 Select Role")
+        role = st.radio(
+            "Choose your role:",
+            ["👨‍💼 Admin", "👨‍🏫 Faculty", "👨‍🎓 Student"],
+            label_visibility="collapsed"
         )
+        
+        st.markdown("---")
+        
+        # Role-based menu
+        if role == "👨‍💼 Admin":
+            st.markdown("### 👨‍💼 Admin Panel")
+            menu_option = st.radio(
+                "Select Option",
+                ["Encode Faces", "System Info"],
+                label_visibility="collapsed"
+            )
+        
+        elif role == "👨‍🏫 Faculty":
+            st.markdown("### 👨‍🏫 Faculty Panel")
+            menu_option = st.radio(
+                "Select Option",
+                ["Live Attendance", "View Attendance"],
+                label_visibility="collapsed"
+            )
+        
+        elif role == "👨‍🎓 Student":
+            st.markdown("### 👨‍🎓 Student Panel")
+            menu_option = "Student Dashboard"
         
         st.markdown("---")
         st.markdown("### System Status")
@@ -123,182 +182,26 @@ def main():
         else:
             st.error("❌ No face encodings found")
     
-    # Main Content
-    if menu_option == "Live Attendance":
-        live_attendance_page()
-    elif menu_option == "Encode Faces":
-        encode_faces_page()
-    elif menu_option == "View Attendance":
-        view_attendance_page()
-    elif menu_option == "About":
-        about_page()
-
-def live_attendance_page():
-    st.header("📹 Live Attendance Tracking")
+    # Route to appropriate page based on role and menu
+    if role == "👨‍💼 Admin":
+        if menu_option == "Encode Faces":
+            encode_faces_page()
+        elif menu_option == "System Info":
+            system_info_page()
     
-    # Check prerequisites
-    encodings = load_encodings()
-    if encodings is None:
-        st.error("⚠️ Please encode faces first before starting attendance!")
-        return
+    elif role == "👨‍🏫 Faculty":
+        if menu_option == "Live Attendance":
+            live_attendance_page()
+        elif menu_option == "View Attendance":
+            view_attendance_page()
     
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("Camera Feed")
-        video_placeholder = st.empty()
-        status_placeholder = st.empty()
-    
-    with col2:
-        st.subheader("Today's Attendance")
-        attendance_placeholder = st.empty()
-        
-        st.subheader("Controls")
-        
-        if not st.session_state.running:
-            if st.button("▶️ Start Attendance", key="start_btn"):
-                st.session_state.running = True
-                st.rerun()
-        else:
-            if st.button("⏹️ Stop Attendance", key="stop_btn"):
-                st.session_state.running = False
-                if st.session_state.camera is not None:
-                    st.session_state.camera.release()
-                    st.session_state.camera = None
-                st.rerun()
-        
-        # Display instructions
-        st.markdown("---")
-        st.markdown("### Instructions")
-        st.info("""
-        1. Click 'Start Attendance'
-        2. Face the camera
-        3. Wait for automatic recognition
-        4. Attendance marked instantly!
-        """)
-    
-    # Main attendance loop
-    if st.session_state.running:
-        run_attendance_system(video_placeholder, status_placeholder, attendance_placeholder, encodings)
-
-def run_attendance_system(video_placeholder, status_placeholder, attendance_placeholder, encodings):
-    # No liveness detection - direct recognition
-    attendance_file = initialize_attendance_file()
-    
-    # Initialize camera if not already done
-    if st.session_state.camera is None:
-        st.session_state.camera = cv2.VideoCapture(0)
-        time.sleep(2)  # Give camera time to initialize
-    
-    video_capture = st.session_state.camera
-    
-    # Check if camera opened successfully
-    if not video_capture.isOpened():
-        status_placeholder.error("❌ Failed to open camera. Please check if camera is connected and not being used by another application.")
-        st.session_state.running = False
-        st.session_state.camera = None
-        return
-    
-    status_placeholder.success("✅ Camera initialized successfully!")
-    
-    frame_count = 0
-    
-    try:
-        while st.session_state.running:
-            ret, frame = video_capture.read()
-            
-            if not ret:
-                status_placeholder.error("Failed to capture frame from camera")
-                time.sleep(0.1)
-                continue
-            
-            frame_count += 1
-            
-            # Face recognition on every 3rd frame for performance
-            if frame_count % 3 == 0:
-                # Resize frame for faster processing
-                rgb_frame_small = cv2.cvtColor(cv2.resize(frame, (0, 0), fx=0.5, fy=0.5), cv2.COLOR_BGR2RGB)
-                
-                # Detect faces
-                face_locations = face_recognition.face_locations(rgb_frame_small)
-                face_encodings = face_recognition.face_encodings(rgb_frame_small, face_locations)
-                
-                names = []
-                
-                for encoding in face_encodings:
-                    name = "Unknown"
-                    
-                    # Compare with known faces
-                    matches = face_recognition.compare_faces(encodings["encodings"], encoding, tolerance=0.6)
-                    
-                    if True in matches:
-                        matched_idxs = [i for (i, b) in enumerate(matches) if b]
-                        counts = {}
-                        for idx in matched_idxs:
-                            name_match = encodings["names"][idx]
-                            counts[name_match] = counts.get(name_match, 0) + 1
-                        name = max(counts, key=counts.get)
-                    
-                    # Mark attendance immediately when recognized
-                    if name != "Unknown" and name not in st.session_state.marked_today:
-                        timestamp = datetime.now().strftime('%H:%M:%S')
-                        new_entry = pd.DataFrame([[name, timestamp]], columns=['Name', 'Timestamp'])
-                        new_entry.to_csv(attendance_file, mode='a', header=False, index=False)
-                        st.session_state.marked_today.append(name)
-                        status_placeholder.success(f"✅ Marked {name} at {timestamp}")
-                    
-                    names.append(name)
-                
-                # Scale face locations back to original frame size
-                boxes = [(int(top*2), int(right*2), int(bottom*2), int(left*2)) 
-                        for (top, right, bottom, left) in face_locations]
-            else:
-                # Use previous detection results
-                if 'boxes' not in locals():
-                    boxes = []
-                if 'names' not in locals():
-                    names = []
-            
-            # Draw boxes and labels on frame
-            for i, (top, right, bottom, left) in enumerate(boxes):
-                name = names[i] if i < len(names) else "Unknown"
-                
-                # Color based on recognition status
-                if name != "Unknown":
-                    color = (0, 255, 0)  # Green for recognized
-                else:
-                    color = (0, 0, 255)  # Red for unknown
-                
-                # Draw rectangle
-                cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
-                
-                # Draw label
-                y = top - 15 if top - 15 > 15 else top + 15
-                cv2.putText(frame, name, (left, y), cv2.FONT_HERSHEY_SIMPLEX, 0.75, color, 2)
-            
-            # Display frame
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            video_placeholder.image(frame_rgb, channels="RGB", width="stretch")
-            
-            # Update attendance display every 30 frames
-            if frame_count % 30 == 0:
-                df = load_attendance_data()
-                attendance_placeholder.dataframe(df, width="stretch")
-            
-            # Small delay to prevent excessive CPU usage
-            time.sleep(0.03)
-    
-    except Exception as e:
-        status_placeholder.error(f"Error during attendance tracking: {str(e)}")
-    
-    finally:
-        # Don't release camera here, let the stop button handle it
-        pass
+    elif role == "👨‍🎓 Student":
+        student_dashboard_page()
 
 def encode_faces_page():
-    st.header("🔐 Encode Faces")
+    st.markdown('<h2 class="role-header">👨‍💼 Admin - Encode Faces</h2>', unsafe_allow_html=True)
     
-    st.info("📁 Place images in the 'dataset' folder with subfolders for each person (e.g., dataset/John/, dataset/Jane/)")
+    st.info("📁 Place images in the 'dataset' folder with subfolders for each person (e.g., dataset/ADITTYA SAHA/, dataset/BITTU KUMAR AZAD/)")
     
     col1, col2 = st.columns(2)
     
@@ -372,10 +275,191 @@ def encode_faces_page():
             
             st.success(f"🎉 Successfully encoded {len(known_encodings)} faces from {len(set(known_names))} people!")
 
-def view_attendance_page():
-    st.header("📊 View Attendance Records")
+def system_info_page():
+    st.markdown('<h2 class="role-header">👨‍💼 Admin - System Information</h2>', unsafe_allow_html=True)
     
-    # Date selector
+    st.markdown("""
+    ### Features
+    - 👤 **Face Recognition**: Accurate face detection and recognition
+    - ⚡ **Instant Marking**: Automatic attendance without delays
+    - 📊 **Automatic Logging**: Records attendance with timestamps
+    - 🎨 **User-Friendly Interface**: Easy-to-use Streamlit interface
+    - 📈 **Student Analytics**: Detailed attendance statistics and visualizations
+    
+    ### How to Use
+    1. **Admin**: Encode faces by adding images to the dataset folder
+    2. **Faculty**: Run live attendance tracking and view records
+    3. **Student**: View personal attendance statistics and graphs
+    
+    ### Technology Stack
+    - OpenCV for video processing
+    - face_recognition for face detection
+    - Streamlit for UI
+    - pandas for data management
+    - Plotly for visualizations
+    """)
+    
+    # System statistics
+    st.subheader("📊 System Statistics")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    encodings = load_encodings()
+    attendance_files = get_all_attendance_files()
+    
+    with col1:
+        if encodings:
+            st.metric("Enrolled Students", len(set(encodings['names'])))
+        else:
+            st.metric("Enrolled Students", 0)
+    
+    with col2:
+        st.metric("Attendance Days", len(attendance_files))
+    
+    with col3:
+        if attendance_files:
+            total_records = sum([len(pd.read_csv(f)) for f in attendance_files])
+            st.metric("Total Records", total_records)
+        else:
+            st.metric("Total Records", 0)
+
+def live_attendance_page():
+    st.markdown('<h2 class="role-header">👨‍🏫 Faculty - Live Attendance</h2>', unsafe_allow_html=True)
+    
+    # Check prerequisites
+    encodings = load_encodings()
+    if encodings is None:
+        st.error("⚠️ Please encode faces first before starting attendance!")
+        return
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.subheader("Camera Feed")
+        video_placeholder = st.empty()
+        status_placeholder = st.empty()
+    
+    with col2:
+        st.subheader("Today's Attendance")
+        attendance_placeholder = st.empty()
+        
+        st.subheader("Controls")
+        
+        if not st.session_state.running:
+            if st.button("▶️ Start Attendance", key="start_btn"):
+                st.session_state.running = True
+                st.rerun()
+        else:
+            if st.button("⏹️ Stop Attendance", key="stop_btn"):
+                st.session_state.running = False
+                if st.session_state.camera is not None:
+                    st.session_state.camera.release()
+                    st.session_state.camera = None
+                st.rerun()
+        
+        # Display instructions
+        st.markdown("---")
+        st.markdown("### Instructions")
+        st.info("""
+        1. Click 'Start Attendance'
+        2. Face the camera
+        3. Wait for automatic recognition
+        4. Attendance marked instantly!
+        """)
+    
+    # Main attendance loop
+    if st.session_state.running:
+        run_attendance_system(video_placeholder, status_placeholder, attendance_placeholder, encodings)
+
+def run_attendance_system(video_placeholder, status_placeholder, attendance_placeholder, encodings):
+    attendance_file = initialize_attendance_file()
+    
+    # Initialize camera if not already done
+    if st.session_state.camera is None:
+        st.session_state.camera = cv2.VideoCapture(0)
+        time.sleep(2)
+    
+    video_capture = st.session_state.camera
+    
+    if not video_capture.isOpened():
+        status_placeholder.error("❌ Failed to open camera. Please check if camera is connected.")
+        st.session_state.running = False
+        st.session_state.camera = None
+        return
+    
+    status_placeholder.success("✅ Camera initialized successfully!")
+    
+    frame_count = 0
+    
+    try:
+        while st.session_state.running:
+            ret, frame = video_capture.read()
+            
+            if not ret:
+                status_placeholder.error("Failed to capture frame from camera")
+                time.sleep(0.1)
+                continue
+            
+            frame_count += 1
+            
+            if frame_count % 3 == 0:
+                rgb_frame_small = cv2.cvtColor(cv2.resize(frame, (0, 0), fx=0.5, fy=0.5), cv2.COLOR_BGR2RGB)
+                face_locations = face_recognition.face_locations(rgb_frame_small)
+                face_encodings = face_recognition.face_encodings(rgb_frame_small, face_locations)
+                
+                names = []
+                
+                for encoding in face_encodings:
+                    name = "Unknown"
+                    matches = face_recognition.compare_faces(encodings["encodings"], encoding, tolerance=0.6)
+                    
+                    if True in matches:
+                        matched_idxs = [i for (i, b) in enumerate(matches) if b]
+                        counts = {}
+                        for idx in matched_idxs:
+                            name_match = encodings["names"][idx]
+                            counts[name_match] = counts.get(name_match, 0) + 1
+                        name = max(counts, key=counts.get)
+                    
+                    if name != "Unknown" and name not in st.session_state.marked_today:
+                        timestamp = datetime.now().strftime('%H:%M:%S')
+                        new_entry = pd.DataFrame([[name, timestamp]], columns=['Name', 'Timestamp'])
+                        new_entry.to_csv(attendance_file, mode='a', header=False, index=False)
+                        st.session_state.marked_today.append(name)
+                        status_placeholder.success(f"✅ Marked {name} at {timestamp}")
+                    
+                    names.append(name)
+                
+                boxes = [(int(top*2), int(right*2), int(bottom*2), int(left*2)) 
+                        for (top, right, bottom, left) in face_locations]
+            else:
+                if 'boxes' not in locals():
+                    boxes = []
+                if 'names' not in locals():
+                    names = []
+            
+            for i, (top, right, bottom, left) in enumerate(boxes):
+                name = names[i] if i < len(names) else "Unknown"
+                color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
+                cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
+                y = top - 15 if top - 15 > 15 else top + 15
+                cv2.putText(frame, name, (left, y), cv2.FONT_HERSHEY_SIMPLEX, 0.75, color, 2)
+            
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            video_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
+            
+            if frame_count % 30 == 0:
+                df = load_attendance_data()
+                attendance_placeholder.dataframe(df, use_container_width=True)
+            
+            time.sleep(0.03)
+    
+    except Exception as e:
+        status_placeholder.error(f"Error during attendance tracking: {str(e)}")
+
+def view_attendance_page():
+    st.markdown('<h2 class="role-header">👨‍🏫 Faculty - View Attendance</h2>', unsafe_allow_html=True)
+    
     col1, col2 = st.columns([1, 3])
     
     with col1:
@@ -384,14 +468,12 @@ def view_attendance_page():
     date_str = selected_date.strftime('%Y-%m-%d')
     attendance_file = f'Attendance_{date_str}.csv'
     
-    # Display attendance
     if os.path.exists(attendance_file):
         df = pd.read_csv(attendance_file)
         
         if not df.empty:
             st.success(f"✅ {len(df)} attendance records found for {date_str}")
             
-            # Statistics
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Total Present", len(df))
@@ -402,11 +484,9 @@ def view_attendance_page():
                     first_time = df['Timestamp'].iloc[0]
                     st.metric("First Entry", first_time)
             
-            # Attendance table
             st.subheader("Attendance Records")
-            st.dataframe(df, width="stretch")
+            st.dataframe(df, use_container_width=True)
             
-            # Download button
             csv = df.to_csv(index=False)
             st.download_button(
                 label="📥 Download CSV",
@@ -419,51 +499,152 @@ def view_attendance_page():
     else:
         st.warning(f"⚠️ No attendance file found for {date_str}")
     
-    # View all attendance files
     st.subheader("All Attendance Files")
-    attendance_files = [f for f in os.listdir('.') if f.startswith('Attendance_') and f.endswith('.csv')]
+    attendance_files = get_all_attendance_files()
     
     if attendance_files:
         for file in sorted(attendance_files, reverse=True):
             with st.expander(f"📄 {file}"):
                 df = pd.read_csv(file)
-                st.dataframe(df, width="stretch")
+                st.dataframe(df, use_container_width=True)
     else:
         st.info("No attendance files found")
 
-def about_page():
-    st.header("ℹ️ About Smart Attendance System")
+def student_dashboard_page():
+    st.markdown('<h2 class="role-header">👨‍🎓 Student - Attendance Dashboard</h2>', unsafe_allow_html=True)
     
-    st.markdown("""
-    ### Features
-    - 👤 **Face Recognition**: Accurate face detection and recognition
-    - ⚡ **Instant Marking**: Automatic attendance without delays
-    - 📊 **Automatic Logging**: Records attendance with timestamps
-    - 🎨 **User-Friendly Interface**: Easy-to-use Streamlit interface
+    # Get all students
+    students = get_all_students()
     
-    ### How to Use
-    1. **Encode Faces**: Add images to the `dataset` folder and encode them
-    2. **Start Attendance**: Run live attendance tracking with your webcam
-    3. **View Records**: Check attendance records by date
+    if not students:
+        st.warning("⚠️ No students found in the system. Please ask admin to encode faces.")
+        return
     
-    ### Requirements
-    - Python 3.7+
-    - Webcam
+    # Student selection
+    selected_student = st.selectbox("Select Student Name", sorted(students))
     
-    ### Technology Stack
-    - OpenCV for video processing
-    - face_recognition for face detection
-    - Streamlit for UI
-    - pandas for data management
-    
-    ### Setup Instructions
-    1. Install requirements: `pip install -r requirements.txt`
-    2. Create dataset folder with person subfolders
-    3. Run: `streamlit run streamlit_app.py`
-    """)
-    
-    st.markdown("---")
-    st.markdown("Made with ❤️ using Streamlit")
+    if selected_student:
+        stats = calculate_student_statistics(selected_student)
+        
+        st.markdown("---")
+        
+        # Display metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Days", stats['total_days'])
+        with col2:
+            st.metric("Present Days", stats['present_days'], delta=None)
+        with col3:
+            st.metric("Absent Days", stats['absent_days'])
+        with col4:
+            st.metric("Attendance %", f"{stats['percentage']:.1f}%")
+        
+        st.markdown("---")
+        
+        # Visualizations
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Pie chart for Present vs Absent
+            fig_pie = go.Figure(data=[go.Pie(
+                labels=['Present', 'Absent'],
+                values=[stats['present_days'], stats['absent_days']],
+                marker=dict(colors=['#2ecc71', '#e74c3c']),
+                hole=0.4
+            )])
+            fig_pie.update_layout(
+                title="Attendance Distribution",
+                height=400
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        with col2:
+            # Gauge chart for attendance percentage
+            fig_gauge = go.Figure(go.Indicator(
+                mode="gauge+number+delta",
+                value=stats['percentage'],
+                domain={'x': [0, 1], 'y': [0, 1]},
+                title={'text': "Attendance Percentage"},
+                delta={'reference': 75},
+                gauge={
+                    'axis': {'range': [None, 100]},
+                    'bar': {'color': "#1f77b4"},
+                    'steps': [
+                        {'range': [0, 50], 'color': "#ffebee"},
+                        {'range': [50, 75], 'color': "#fff9c4"},
+                        {'range': [75, 100], 'color': "#e8f5e9"}
+                    ],
+                    'threshold': {
+                        'line': {'color': "red", 'width': 4},
+                        'thickness': 0.75,
+                        'value': 75
+                    }
+                }
+            ))
+            fig_gauge.update_layout(height=400)
+            st.plotly_chart(fig_gauge, use_container_width=True)
+        
+        # Attendance timeline
+        if stats['attendance_dates']:
+            st.subheader("📅 Attendance Timeline")
+            
+            # Create timeline data
+            all_files = sorted(get_all_attendance_files())
+            dates = [f.replace('Attendance_', '').replace('.csv', '') for f in all_files]
+            status = ['Present' if date in stats['attendance_dates'] else 'Absent' for date in dates]
+            
+            df_timeline = pd.DataFrame({
+                'Date': dates,
+                'Status': status
+            })
+            
+            # Bar chart for timeline
+            fig_timeline = px.bar(
+                df_timeline,
+                x='Date',
+                y=[1]*len(dates),
+                color='Status',
+                color_discrete_map={'Present': '#2ecc71', 'Absent': '#e74c3c'},
+                title="Daily Attendance Status"
+            )
+            fig_timeline.update_layout(
+                showlegend=True,
+                yaxis_title="",
+                yaxis_showticklabels=False,
+                height=300
+            )
+            st.plotly_chart(fig_timeline, use_container_width=True)
+            
+            # Detailed attendance records
+            with st.expander("📋 View Detailed Attendance Records"):
+                records = []
+                for date in stats['attendance_dates']:
+                    file = f'Attendance_{date}.csv'
+                    if os.path.exists(file):
+                        df = pd.read_csv(file)
+                        student_record = df[df['Name'] == selected_student]
+                        if not student_record.empty:
+                            records.append({
+                                'Date': date,
+                                'Time': student_record['Timestamp'].iloc[0]
+                            })
+                
+                if records:
+                    df_records = pd.DataFrame(records)
+                    st.dataframe(df_records, use_container_width=True)
+        else:
+            st.info("No attendance records found for this student.")
+        
+        # Performance message
+        st.markdown("---")
+        if stats['percentage'] >= 75:
+            st.success("🎉 Great job! Your attendance is above 75%")
+        elif stats['percentage'] >= 50:
+            st.warning("⚠️ Your attendance is below 75%. Please maintain regular attendance.")
+        else:
+            st.error("❌ Your attendance is critically low. Please attend regularly!")
 
 if __name__ == "__main__":
     main()
+   
