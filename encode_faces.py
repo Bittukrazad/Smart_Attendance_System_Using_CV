@@ -1,22 +1,3 @@
-"""
-Updated encode_faces.py
-- Handles EXIF rotation
-- Resizes images for faster encoding
-- Handles corrupted images
-- Uses num_jitters=5 for more accurate encodings
-- Skips non-image files safely
-
-Dataset structure:
-dataset/
-   person1/
-       image1.jpg
-       image2.png
-   person2/
-       ...
-
-Outputs:
-encodings.pickle with keys: 'encodings', 'names'
-"""
 
 import face_recognition
 import pickle
